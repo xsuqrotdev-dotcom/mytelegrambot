@@ -1,37 +1,30 @@
-from http.server import BaseHTTPRequestHandler, HTTPServer
-import threading
-
-# Render uchun oddiy portni band qilib turuvchi server
-class HealthCheckHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Bot is alive!")
-
-def run_health_check():
-    server = HTTPServer(('0.0.0.0', 10000), HealthCheckHandler)
-    server.serve_forever()
-
-# Botni ishga tushirishdan oldin bu funksiyani alohida oqimda (thread) yuritamiz
-threading.Thread(target=run_health_check, daemon=True).start()
-
-# --- BU YERDAN KEYIN SIZNING ASOSIY BOT KODINGIZ BOSHLANADI ---
-# Masalan: executor.start_polling(dp) yoki dp.run_polling(bot)
-
 import asyncio
 import logging
 import sys
+import os
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.context import FSMContext  # To'g'ri import shu yerda
+from aiogram.fsm.context import FSMContext
+from fastapi import FastAPI
+import uvicorn
 
-# --- KONFIGURATSIYA ---
-TOKEN = "8549958201:AAGNdr6gNFLkvvEZ0dofCieB6BMv_m_i6qE"
+# --- 1. RENDER UCHUN WEB SERVER ---
+app = FastAPI()
+
+
+@app.get("/")
+async def health_check():
+    return {"status": "bot is running"}
+
+
+# --- 2. KONFIGURATSIYA ---
+# BU YERGA O'Z TOKENINGIZNI QO'YING (Tirnoq ichida)
+TOKEN = "8549958201:AAH6EN9L5r731bgeAnphC8kVXpjuShvOmnI"
 ADMIN_USERNAME = "@Socrates_xm"
-# DIQQAT: O'z ID raqamingizni @userinfobot orqali bilib, bu yerga yozing:
-ADMIN_ID = 123456789  # O'z ID-ingizni kiriting
+# BU YERGA O'Z ID RAQAMINGIZNI QO'YING (Masalan: 12345678)
+ADMIN_ID = 5971900296
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -45,7 +38,8 @@ class OrderState(StatesGroup):
     waiting_direct_message = State()
 
 
-# --- MATNLAR LUG'ATI ---
+# --- 3. MATNLAR LUG'ATI ---
+
 TEXTS = {
     'uz': {
         'welcome': "Salom! Men xsmdev botiman.",
@@ -58,6 +52,7 @@ TEXTS = {
         'ask_msg': "Murojaatingizni yozib qoldiring:",
         'success': "Ma'lumot qabul qilindi. Tez orada admin siz bilan bog'lanadi!",
         'admin_info': f"Admin bilan bog'lanish uchun: {ADMIN_USERNAME}"
+
     },
     'ru': {
         'welcome': "Привет! Я бот xsmdev.",
@@ -71,10 +66,11 @@ TEXTS = {
         'success': "Информация получена. Скоро админ свяжется с вами!",
         'admin_info': f"Для связи с админом: {ADMIN_USERNAME}"
     }
+
 }
 
 
-# --- KEYBOARDLAR ---
+# --- 4. KEYBOARDLAR ---
 def get_lang_keyboard():
     builder = ReplyKeyboardBuilder()
     builder.button(text="🇺🇿 O'zbekcha")
@@ -97,8 +93,7 @@ def get_back_keyboard(lang):
     return builder.as_markup(resize_keyboard=True)
 
 
-# --- HANDLERLAR ---
-
+# --- 5. HANDLERLAR ---
 @dp.message(CommandStart())
 async def command_start_handler(message: types.Message, state: FSMContext):
     await state.clear()
@@ -118,11 +113,13 @@ async def set_language(message: types.Message, state: FSMContext):
 async def back_to_menu(message: types.Message, state: FSMContext):
     user_data = await state.get_data()
     lang = user_data.get('lang', 'uz')
-    await state.set_state(None)  # Holatni tozalash
+    await state.set_state(None)
     await message.answer(TEXTS[lang]['choose_service'], reply_markup=get_main_keyboard(lang))
 
 
-@dp.message(F.text.in_([TEXTS['uz']['btn_bot_order'], TEXTS['ru']['btn_bot_order']]))
+@dp.message(F.text.in_([TEXTS['uz']['btn_bot_order'], TEXTS['ru']
+
+['btn_bot_order']]))
 async def bot_order_process(message: types.Message, state: FSMContext):
     user_data = await state.get_data()
     lang = user_data.get('lang', 'uz')
@@ -148,7 +145,6 @@ async def direct_msg_process(message: types.Message, state: FSMContext):
 @dp.message(OrderState.waiting_bot_details)
 @dp.message(OrderState.waiting_direct_message)
 async def handle_input(message: types.Message, state: FSMContext):
-    # Agar foydalanuvchi "Ortga" tugmasini bossa
     if message.text in [TEXTS['uz']['btn_back'], TEXTS['ru']['btn_back']]:
         user_data = await state.get_data()
         lang = user_data.get('lang', 'uz')
@@ -159,13 +155,13 @@ async def handle_input(message: types.Message, state: FSMContext):
     user_data = await state.get_data()
     lang = user_data.get('lang', 'uz')
     current_state = await state.get_state()
-
-    # Adminga xabar yuborish qismi
     order_type = "Bot buyurtmasi" if current_state == OrderState.waiting_bot_details else "Yangi murojaat"
     admin_msg = f"🔔 {order_type}!\n👤 Kimdan: @{message.from_user.username}\n🆔 ID: {message.from_user.id}\n📝 Xabar: {message.text}"
 
     try:
-        await bot.send_message(ADMIN_ID, admin_msg)
+        await bot.send_message(ADMIN_ID,
+
+                               admin_msg)
     except Exception as e:
         logging.error(f"Adminga xabar yuborishda xato: {e}")
 
@@ -173,12 +169,33 @@ async def handle_input(message: types.Message, state: FSMContext):
     await state.set_state(None)
 
 
+# --- 6. ASOSIY ISHGA TUSHIRISH LOGIKASI ---
 async def main():
+    # Logging sozlamalari
     logging.basicConfig(level=logging.INFO, stream=sys.stdout)
-    await dp.start_polling(bot)
+
+    # Render portni muhitdan oladi (PC da 8000 bo'ladi)
+    port = int(os.environ.get("PORT", 8000))
+
+    # 1. Botingizni orqa fonda ishga tushiramiz
+
+    # asyncio.create_task bu loop-ni "RuntimeError" bermasligini ta'minlaydi
+    logging.info("Bot polling boshlanmoqda...")
+    asyncio.create_task(dp.start_polling(bot))
+
+    # 2. Web serverni asosiy oqimda ishga tushiramiz
+    # Uvicorn dasturni yopilib qolishidan saqlaydi
+    config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="info")
+    server = uvicorn.Server(config)
+
+    logging.info(f"Server {port}-portda ishlamoqda...")
+    await server.serve()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        # Eng to'g'ri ishga tushirish usuli shu
 
-
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logging.info("Bot to'xtatildi")
